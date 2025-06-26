@@ -1,0 +1,110 @@
+//@version=5
+indicator("NAS100 US Open Breakout Strategy with SMA Filter and Position Sizing", overlay=true)
+
+// === НАСТРОЙКИ ПОЗИЦИИ ===
+deposit     = input.float(10000, "Депозит (USD)", minval=100)
+riskPercent = input.float(1.0, "Риск на сделку (%)", minval=0.1, maxval=100, step=0.1)
+leverage    = input.float(1.0, "Плечо", minval=1, maxval=100, step=0.1)
+showPosSize = input.bool(true, "Показывать объём позиции")
+
+// === НАСТРОЙКИ ЯРЛЫКА ОБЪЕМА ===
+labelBgColor   = input.color(color.new(color.gray, 100), "Фон ярлыка позиции", inline="lbl")
+labelTextColor = input.color(color.white, "Цвет текста", inline="lbl")
+labelSizeOpt   = input.string("small", "Размер", options=["tiny", "small", "normal", "large"], inline="lbl")
+labelStyleOpt  = input.string("label_up", "Стиль", options=["label_up", "label_down", "label_left", "label_right"], inline="lbl")
+
+// === НАСТРОЙКИ SMA-ФИЛЬТРА ===
+useSmaFilter = input.bool(true, "Фильтровать по SMA")
+smaPeriod    = input.int(70, "Период SMA", minval=1)
+smaColor     = input.color(color.red, "Цвет SMA")
+smaWidth     = input.int(2, "Толщина SMA", minval=1, maxval=5)
+
+sma = ta.sma(close, smaPeriod)
+plot(useSmaFilter ? sma : na, title="SMA", color=smaColor, linewidth=smaWidth)
+
+// === ВРЕМЯ СЕССИИ NY (9:30 – 10:00) ===
+startHour = 9
+startMin  = 30
+endHour   = 10
+endMin    = 0
+sessionStart = timestamp("America/New_York", year, month, dayofmonth, startHour, startMin)
+sessionEnd   = timestamp("America/New_York", year, month, dayofmonth, endHour, endMin)
+
+// === ДИАПАЗОН ОТКРЫТИЯ ===
+var float rangeHigh = na
+var float rangeLow  = na
+var int rangeStartBar = na
+var int lastBarOfDay  = na
+var bool rangeReady   = false
+
+if ta.change(time("D"))
+    rangeHigh := na
+    rangeLow  := na
+    rangeStartBar := na
+    lastBarOfDay  := na
+    rangeReady := false
+
+if time >= sessionStart and time <= sessionEnd
+    if na(rangeStartBar)
+        rangeStartBar := bar_index
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow, low)
+
+lastBarOfDay := bar_index
+
+var line highLine = na
+var line lowLine  = na
+
+if time > sessionEnd and not rangeReady and not na(rangeHigh) and not na(rangeLow)
+    highLine := line.new(rangeStartBar, rangeHigh, lastBarOfDay, rangeHigh, extend=extend.none, color=color.blue, width=2)
+    lowLine  := line.new(rangeStartBar, rangeLow, lastBarOfDay, rangeLow, extend=extend.none, color=color.orange, width=2)
+    rangeReady := true
+
+if rangeReady
+    line.set_xy1(highLine, rangeStartBar, rangeHigh)
+    line.set_xy2(highLine, lastBarOfDay, rangeHigh)
+    line.set_xy1(lowLine, rangeStartBar, rangeLow)
+    line.set_xy2(lowLine, lastBarOfDay, rangeLow)
+
+// === УСЛОВИЯ ВХОДА С ФИЛЬТРОМ SMA ===
+longCondition  = ta.crossover(close, rangeHigh)
+shortCondition = ta.crossunder(close, rangeLow)
+
+longSignalNow  = longCondition and rangeReady and (not useSmaFilter or close > sma)
+shortSignalNow = shortCondition and rangeReady and (not useSmaFilter or close < sma)
+
+plotshape(longSignalNow, title="Long Entry", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+plotshape(shortSignalNow, title="Short Entry", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
+
+// === СТОП-ЛОСС, ТЕЙК-ПРОФИТ, ОБЪЕМ ПОЗИЦИИ ===
+slLong  = rangeHigh * 0.995
+tpLong  = rangeHigh * 1.01
+slShort = rangeLow  * 1.005
+tpShort = rangeLow  * 0.99
+
+riskAmount      = deposit * riskPercent / 100
+stopLongDist    = rangeHigh - slLong
+stopShortDist   = slShort - rangeLow
+
+posSizeLong     = stopLongDist > 0 ? math.round((riskAmount * leverage) / stopLongDist * 1000) / 1000 : 0
+posSizeShort    = stopShortDist > 0 ? math.round((riskAmount * leverage) / stopShortDist * 1000) / 1000 : 0
+
+// === ПРЕОБРАЗОВАНИЕ НАСТРОЕК ЯРЛЫКА ===
+labelStyle = labelStyleOpt == "label_up" ? label.style_label_up :
+             labelStyleOpt == "label_down" ? label.style_label_down :
+             labelStyleOpt == "label_left" ? label.style_label_left :
+             label.style_label_right
+
+labelSize = labelSizeOpt == "tiny" ? size.tiny :labelSizeOpt == "small" ? size.small :labelSizeOpt == "normal" ? size.normal :size.large
+// === ВЫВОД ЛИНИЙ И ЯРЛЫКА ===
+if rangeReady
+    if longSignalNow
+        line.new(bar_index, slLong, bar_index + 10, slLong, color=color.red, style=line.style_dashed)
+        line.new(bar_index, tpLong, bar_index + 10, tpLong, color=color.green, style=line.style_dashed)
+        if showPosSize
+            label.new(bar_index, close * 0.995, text="Pos: " + str.tostring(posSizeLong),yloc=yloc.price,style=labelStyle,size=labelSize,textcolor=labelTextColor,color=labelBgColor)
+    if shortSignalNow
+        line.new(bar_index, slShort, bar_index + 10, slShort, color=color.red, style=line.style_dashed)
+        line.new(bar_index, tpShort, bar_index + 10, tpShort, color=color.green, style=line.style_dashed)
+        if showPosSize
+            label.new(bar_index, close * 1.005, text="Pos: " + str.tostring(posSizeShort),yloc=yloc.price,style=labelStyle,size=labelSize,textcolor=labelTextColor,color=labelBgColor)
